@@ -16,9 +16,8 @@
 
 # Homepage: http://ssb22.user.srcf.net/mwrhome/jianpu-ly.py
 # Git repository: https://github.com/ssb22/jianpu-ly
-# and on GitLab: https://gitlab.com/ssb22/jianpu-ly
-# and on Bitbucket: https://bitbucket.org/ssb22/jianpu-ly
-# and at https://gitlab.developers.cam.ac.uk/ssb22/jianpu-ly
+# or on GitLab: https://gitlab.com/ssb22/jianpu-ly
+# or Bitbucket: https://bitbucket.org/ssb22/jianpu-ly
 
 # (The following doc string's format is fixed, see --html)
 r"""Run jianpu-ly < text-file > ly-file (or jianpu-ly text-files > ly-file)
@@ -97,6 +96,16 @@ def all_scores_start(staff_size = 20):
 
   %% un-comment the next line for a more space-saving header layout:
   %% scoreTitleMarkup = \markup { \center-column { \fill-line { \magnify #1.5 { \bold { \fromproperty #'header:dedication } } \magnify #1.5 { \bold { \fromproperty #'header:title } } \fromproperty #'header:composer } \fill-line { \fromproperty #'header:instrument \fromproperty #'header:subtitle \smaller{\fromproperty #'header:subsubtitle } } } }
+
+  #(define fonts
+    (set-global-fonts
+      #:music "emmentaler"
+      #:brace "emmentaler"
+      #:roman "SimHei"
+      #:sans "sans-serif"
+      #:typewriter "WenQuanYi Zen Hei Mono"
+      #:factor (/ staff-height pt 20)
+  ))
 }
 """ % staff_size
 
@@ -116,19 +125,22 @@ def score_end(**headers):
         ret += r"\header{"+'\n'
         for k,v in headers.items(): ret+=k+'="'+v+'"\n'
         ret += "}\n"
-    if midi: ret += r"\midi { \context { \Score tempoWholesPerMinute = #(ly:make-moment 84 4)}}" # TODO: make this customisable (and/or check how to print BPMs in jianpu)
+    if midi:
+        # Get the tempo value and make moment for midi.
+        (tempo_bpm, tempo_unit) = midi_make_moment_from_tempo(tempoValue)
+        ret += r"\midi { \context { \Score tempoWholesPerMinute = #(ly:make-moment %s %s)}}" % (tempo_bpm, tempo_unit) # TODO: make this customisable (and/or check how to print BPMs in jianpu)
     elif notehead_markup.noBarNums: ret += r'\layout { \context { \Score \remove "Bar_number_engraver" } }'
     else: ret += r"\layout{}"
     return ret + " }"
 
 tempCount = 0
-def jianpu_voice_start(voiceName="tmp"):
+def jianpu_voice_start(voiceName="tmp", tempoValue="4=60"):
     stemLenFrac = "0" # unless overridden to 0.5 below
     if voiceName=="tmp": # make it unique just in case
         global tempCount
         voiceName += str(tempCount) ; tempCount += 1
     elif maxBeams >= 2: stemLenFrac = "0.5" # sometimes needed if the semiquavers occur in isolation rather than in groups (TODO do we need to increase this for 3+ beams in some cases?)
-    return r"""\new Voice="%s" {
+    return r"""\tempo %s \new Voice="%s" {
     \override Beam #'transparent = ##f %% (needed for LilyPond 2.18 or the above switch will also hide beams)
     \override Stem #'direction = #DOWN
     \override Stem #'length-fraction = #%s
@@ -140,8 +152,15 @@ def jianpu_voice_start(voiceName="tmp"):
     \override TupletBracket #'bracket-visibility = ##t
     \tupletUp
     \set Voice.chordChanges = ##t %% 2.19 bug workaround
-""" % (voiceName,stemLenFrac) # chordChanges: This is to work around a bug in LilyPond 2.19.82.  \applyOutput docs say "called for every layout object found in the context Context at the current time step" but 2.19.x breaks this by calling it for ALL contexts in the current time step, hence breaking our WithStaff by applying our jianpu numbers to the 5-line staff too.  Obvious workaround is to make our function check that the context it's called with matches our jianpu voice, but I'm not sure how to do this other than by setting a property that's not otherwise used, which we can test for in the function.  So I'm 'commandeering' the "chordChanges" property (there since at least 2.15 and used by Lilypond only when it's in chord mode, which we don't use, and if someone adds a chord-mode staff then it won't print noteheads anyway): we will substitute jianpu numbers for noteheads only if chordChanges = #t.
-def jianpu_staff_start(voiceName="jianpu"):
+""" % (tempoValue, voiceName,stemLenFrac) # chordChanges: This is to work around a bug in LilyPond 2.19.82.  \applyOutput docs say "called for every layout object found in the context Context at the current time step" but 2.19.x breaks this by calling it for ALL contexts in the current time step, hence breaking our WithStaff by applying our jianpu numbers to the 5-line staff too.  Obvious workaround is to make our function check that the context it's called with matches our jianpu voice, but I'm not sure how to do this other than by setting a property that's not otherwise used, which we can test for in the function.  So I'm 'commandeering' the "chordChanges" property (there since at least 2.15 and used by Lilypond only when it's in chord mode, which we don't use, and if someone adds a chord-mode staff then it won't print noteheads anyway): we will substitute jianpu numbers for noteheads only if chordChanges = #t.
+
+# Global variable for default tempo value.
+tempoValue = "4=60"
+# Get the tempo value pair to make moment for midi staff output.
+def midi_make_moment_from_tempo(tempoValue):
+    return tempoValue.split("=")[-1::-1]
+
+def jianpu_staff_start(voiceName="jianpu", tempoValue="4=60"):
     # (we add "BEGIN JIANPU STAFF" and "END JIANPU STAFF" comments to make it easier to copy/paste into other Lilypond files)
     return r"""
 %% === BEGIN JIANPU STAFF ===
@@ -151,11 +170,12 @@ def jianpu_staff_start(voiceName="jianpu"):
     \override StaffSymbol #'line-count = #0 %% tested in 2.15.40, 2.16.2, 2.18.0, 2.18.2 and 2.20.0
     \override BarLine #'bar-extent = #'(-2 . 2) %% LilyPond 2.18: please make barlines as high as the time signature even though we're on a RhythmicStaff (2.16 and 2.15 don't need this although its presence doesn't hurt; Issue 3685 seems to indicate they'll fix it post-2.18)
     }
-    { """+jianpu_voice_start(voiceName)+r"""
+    { """+jianpu_voice_start(voiceName, tempoValue)+r"""
     \override Staff.TimeSignature #'style = #'numbered
     \override Staff.Stem #'transparent = ##t
     """
 def jianpu_staff_end(): return "} }\n% === END JIANPU STAFF ===\n" # \bar "|." is added separately if there's not a DC etc
+
 def midi_staff_start(voiceName="midi"):
     return r"""
 %% === BEGIN MIDI STAFF ===
@@ -524,6 +544,8 @@ def gracenotes_western(notes):
     return ' '.join(r)
 
 def getLY(score):
+   global tempoValue
+
    lyrics = "" ; headers = {}
    notehead_markup.initOneScore()
    out = [] ; maxBeams = 0 ; need_final_barline = 0
@@ -532,7 +554,14 @@ def getLY(score):
    aftrnext = defined_jianpuGrace = defined_JGR = None
    for line in score.split("\n"):
     line = fix_fullwidth(line).strip()
-    if line.startswith("LP:"):
+
+    if line.startswith("%%"):
+        # Try to match and parse the tempo value.
+        tempo_re = re.compile("^%%\s*tempo:\s*(\S+)\s*$")
+        m = tempo_re.match(line)
+        if (m):
+            tempoValue = m.group(1)
+    elif line.startswith("LP:"):
         # Escaped LilyPond block.  Thanks to James Harkins for this suggestion.
         # (Our internal barcheck does not understand code in LP blocks, so keep it to complete bars.)
         # E.g. for multibar rests:
@@ -782,7 +811,7 @@ for score in re.split(r"\sNextScore\s"," "+inDat+" "):
    if midi:
        print (midi_staff_start()+" "+out+" "+midi_staff_end())
    else:
-       print (jianpu_staff_start()+" "+out+" "+jianpu_staff_end())
+       print (jianpu_staff_start("jianpu", tempoValue)+" "+out+" "+jianpu_staff_end())
        if notehead_markup.withStaff:
            western=True ; print (western_staff_start()+" "+getLY(score)[0]+" "+western_staff_end()) ; western = False
            lyrics = lyrics.replace(r'\lyricsto "jianpu"',r'\lyricsto "5line"')
